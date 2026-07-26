@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تقسيم واستخراج صفحات PDF مجاناً — Zenfile</title>
+<meta name="description" content="استخرج صفحات محددة من ملف PDF أو قسّمه لملفات منفصلة، مباشرة داخل متصفحك.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235B4FE8'/%3E%3Ccircle cx='16' cy='16' r='7' fill='white' opacity='0.9'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="container nav">
+    <a href="../index.html" class="wordmark">Zen<span>file</span></a>
+    <button class="nav-toggle" aria-label="فتح القائمة">☰</button>
+    <ul class="nav-links">
+      <li><a href="../index.html#tools">الأدوات</a></li>
+      <li><a href="../index.html#how">كيف يعمل</a></li>
+      <li><a href="../index.html#privacy">الخصوصية</a></li>
+    </ul>
+  </nav>
+</header>
+
+<section class="tool-page-head container">
+  <div class="tool-icon" style="margin:0 auto;">✂️</div>
+  <h1>تقسيم PDF</h1>
+  <p>استخرج صفحات محددة، أو قسّم كل صفحة لملف منفصل.</p>
+</section>
+
+<div class="container">
+  <div class="tool-workspace">
+
+    <div class="dropzone" id="dropzone">
+      <div class="dz-icon">📤</div>
+      <h3>اسحب ملف PDF هنا أو اضغط للاختيار</h3>
+      <p>ملف واحد فقط</p>
+      <input type="file" id="fileInput" accept="application/pdf">
+    </div>
+
+    <div class="file-list" id="fileList"></div>
+
+    <div id="optionsArea" style="display:none;">
+      <div class="control-row">
+        <label>
+          <input type="radio" name="mode" value="range" checked> استخراج نطاق صفحات
+        </label>
+        <label>
+          <input type="radio" name="mode" value="each"> فصل كل صفحة لملف مستقل
+        </label>
+      </div>
+      <div class="control-row" id="rangeRow">
+        <label for="fromPage">من صفحة</label>
+        <input type="number" id="fromPage" min="1" value="1" style="width:80px; padding:9px; border:1px solid var(--border); border-radius:8px;">
+        <label for="toPage">إلى صفحة</label>
+        <input type="number" id="toPage" min="1" value="1" style="width:80px; padding:9px; border:1px solid var(--border); border-radius:8px;">
+        <span class="fr-meta" id="pageCountLabel"></span>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-full" id="splitBtn" style="margin-top:20px;" disabled>تنفيذ</button>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-label" id="progressLabel">جاري المعالجة...</div>
+    </div>
+
+    <div class="result-box" id="resultBox">
+      <div class="rb-text">
+        <b id="resultTitle"></b>
+        <span id="resultSub"></span>
+      </div>
+      <button class="btn btn-primary" id="downloadBtn">تحميل</button>
+    </div>
+
+    <div class="privacy-note">🔒 ملفاتك تُعالج محلياً داخل متصفحك فقط، ولا تُرفع لأي سيرفر.</div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-bottom">Zenfile — أدوات ملفات مجانية تعمل بالكامل داخل متصفحك</div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="../main.js"></script>
+<script>
+let currentFile = null;
+let pageCount = 0;
+let resultBlob = null;
+let resultName = '';
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileList = document.getElementById('fileList');
+const optionsArea = document.getElementById('optionsArea');
+const rangeRow = document.getElementById('rangeRow');
+const fromPage = document.getElementById('fromPage');
+const toPage = document.getElementById('toPage');
+const pageCountLabel = document.getElementById('pageCountLabel');
+const splitBtn = document.getElementById('splitBtn');
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const progressLabel = document.getElementById('progressLabel');
+const resultBox = document.getElementById('resultBox');
+const resultTitle = document.getElementById('resultTitle');
+const resultSub = document.getElementById('resultSub');
+const downloadBtn = document.getElementById('downloadBtn');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if(fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+document.querySelectorAll('input[name=mode]').forEach(r => {
+  r.addEventListener('change', () => {
+    rangeRow.style.display = document.querySelector('input[name=mode]:checked').value === 'range' ? 'flex' : 'none';
+  });
+});
+
+function formatBytes(bytes){
+  if(bytes < 1024) return bytes + ' B';
+  if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/(1024*1024)).toFixed(2) + ' MB';
+}
+
+async function handleFile(file){
+  currentFile = file;
+  fileList.innerHTML = `
+    <div class="file-row">
+      <div>
+        <div class="fr-name">${file.name}</div>
+        <div class="fr-meta">${formatBytes(file.size)}</div>
+      </div>
+      <button class="fr-remove" id="removeFile">إزالة</button>
+    </div>
+  `;
+  document.getElementById('removeFile').addEventListener('click', () => {
+    currentFile = null;
+    fileList.innerHTML = '';
+    optionsArea.style.display = 'none';
+    splitBtn.disabled = true;
+    resultBox.classList.remove('active');
+  });
+
+  try{
+    const { PDFDocument } = PDFLib;
+    const bytes = await file.arrayBuffer();
+    const pdf = await PDFDocument.load(bytes);
+    pageCount = pdf.getPageCount();
+    pageCountLabel.textContent = `(الملف فيه ${pageCount} صفحة)`;
+    fromPage.max = pageCount; toPage.max = pageCount; toPage.value = pageCount;
+    optionsArea.style.display = 'block';
+    splitBtn.disabled = false;
+  }catch(err){
+    console.error(err);
+    progressLabel.textContent = 'تعذر قراءة الملف، تأكد إنه PDF صالح';
+  }
+}
+
+splitBtn.addEventListener('click', async () => {
+  if(!currentFile) return;
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  progressWrap.classList.add('active');
+  resultBox.classList.remove('active');
+  splitBtn.disabled = true;
+
+  try{
+    const { PDFDocument } = PDFLib;
+    const bytes = await currentFile.arrayBuffer();
+    const srcPdf = await PDFDocument.load(bytes);
+    const baseName = currentFile.name.replace(/\.pdf$/i, '');
+
+    if(mode === 'range'){
+      const from = Math.max(1, parseInt(fromPage.value) || 1);
+      const to = Math.min(pageCount, parseInt(toPage.value) || pageCount);
+      progressLabel.textContent = 'جاري استخراج الصفحات...';
+      const newPdf = await PDFDocument.create();
+      const indices = [];
+      for(let i=from-1; i<=to-1; i++) indices.push(i);
+      const pages = await newPdf.copyPages(srcPdf, indices);
+      pages.forEach(p => newPdf.addPage(p));
+      const outBytes = await newPdf.save();
+      resultBlob = new Blob([outBytes], { type:'application/pdf' });
+      resultName = `${baseName}-p${from}-${to}.pdf`;
+      resultTitle.textContent = 'تم استخراج الصفحات بنجاح';
+      resultSub.textContent = `صفحات ${from} إلى ${to} (${formatBytes(resultBlob.size)})`;
+    } else {
+      const zip = new JSZip();
+      for(let i=0; i<pageCount; i++){
+        progressLabel.textContent = `جاري فصل الصفحة ${i+1} من ${pageCount}...`;
+        progressFill.style.width = Math.round((i/pageCount)*100) + '%';
+        const newPdf = await PDFDocument.create();
+        const [page] = await newPdf.copyPages(srcPdf, [i]);
+        newPdf.addPage(page);
+        const outBytes = await newPdf.save();
+        zip.file(`${baseName}-page-${i+1}.pdf`, outBytes);
+      }
+      const zipBlob = await zip.generateAsync({type:'blob'});
+      resultBlob = zipBlob;
+      resultName = `${baseName}-pages.zip`;
+      resultTitle.textContent = 'تم فصل كل الصفحات بنجاح';
+      resultSub.textContent = `${pageCount} ملف PDF داخل أرشيف واحد`;
+    }
+
+    progressFill.style.width = '100%';
+    progressLabel.textContent = 'اكتمل!';
+    setTimeout(() => progressWrap.classList.remove('active'), 600);
+    resultBox.classList.add('active');
+  }catch(err){
+    console.error(err);
+    progressLabel.textContent = 'حدث خطأ أثناء المعالجة';
+  }
+  splitBtn.disabled = false;
+});
+
+downloadBtn.addEventListener('click', () => {
+  if(!resultBlob) return;
+  const url = URL.createObjectURL(resultBlob);
+  const a = document.createElement('a');
+  a.href = url; a.download = resultName;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
